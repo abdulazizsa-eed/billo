@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Undo/redo with two stacks</title>
+<style>
+:root{
+  --bg:#eef1f5;--surface:#fff;--ink:#1b2433;--muted:#5d6878;--line:#d5dbe4;
+  --undo:#2f5bd8;--undo-bg:#e6ecfc;--redo:#0b7d6e;--redo-bg:#dff3ef;
+  color-scheme:light;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161d;--surface:#1b212b;--ink:#e6eaf0;--muted:#97a2b3;--line:#2e3644;
+  --undo:#8aa6ff;--undo-bg:#232d4d;--redo:#4cc9b0;--redo-bg:#17372f;color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#12161d;--surface:#1b212b;--ink:#e6eaf0;--muted:#97a2b3;--line:#2e3644;
+  --undo:#8aa6ff;--undo-bg:#232d4d;--redo:#4cc9b0;--redo-bg:#17372f;color-scheme:dark;}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:28px 20px 40px}
+h1{font:600 1.7rem/1.2 Georgia,"Iowan Old Style",serif;margin:0 0 6px}
+.lead{color:var(--muted);margin:0 0 24px;max-width:62ch}
+.grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px}
+textarea{width:100%;min-height:220px;resize:vertical;border:1px solid var(--line);border-radius:6px;padding:12px;
+  background:var(--bg);color:var(--ink);font:1.05rem/1.6 Georgia,"Iowan Old Style",serif}
+textarea:focus-visible,button:focus-visible{outline:2px solid var(--undo);outline-offset:2px}
+.bar{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+button{font:inherit;font-weight:600;padding:8px 16px;border-radius:6px;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink);cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}
+#undoBtn:not(:disabled){background:var(--undo-bg);border-color:var(--undo);color:var(--undo)}
+#redoBtn:not(:disabled){background:var(--redo-bg);border-color:var(--redo);color:var(--redo)}
+.status{margin:14px 0 0;min-height:3em;color:var(--muted);font-size:.92rem}
+.stacks{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stack h2{font-size:1rem;margin:0 0 2px}
+.stack .size{color:var(--muted);font-size:.85rem;margin:0 0 10px}
+.stack.u h2{color:var(--undo)}.stack.r h2{color:var(--redo)}
+ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-height:240px}
+li{border-radius:6px;padding:7px 9px;font-size:.85rem;line-height:1.35;border:1px solid var(--line);overflow-wrap:anywhere}
+.u li{background:var(--undo-bg);border-color:transparent}
+.r li{background:var(--redo-bg);border-color:transparent}
+li:first-child{border:2px solid currentColor;font-weight:600}
+.u li:first-child{color:var(--undo)}.r li:first-child{color:var(--redo)}
+li small{display:block;font-weight:400;color:var(--muted)}
+li.empty{border-style:dashed;background:none;color:var(--muted);font-weight:400}
+li.enter{animation:drop .25s ease-out}
+@keyframes drop{from{transform:translateY(-14px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){li.enter{animation:none}}
+.rules{margin-top:20px;color:var(--muted);font-size:.92rem}
+.rules ol{min-height:0;list-style:decimal;padding-left:20px;display:block}
+.rules li{border:0;padding:2px 0;background:none;font-size:inherit}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Undo and redo with two stacks</h1>
+  <p class="lead">Type in the editor, then undo and redo. Each edit is pushed onto the undo stack; undoing pops it and pushes it onto the redo stack. The top of each stack is outlined.</p>
+
+  <div class="grid">
+    <section class="panel" aria-label="Editor">
+      <textarea id="ed" placeholder="Start typing here…" spellcheck="false"></textarea>
+      <div class="bar">
+        <button id="undoBtn" type="button">Undo</button>
+        <button id="redoBtn" type="button">Redo</button>
+      </div>
+      <p class="status" id="status" aria-live="polite">Nothing yet. Type something to push the first edit.</p>
+    </section>
+
+    <section class="stacks" aria-label="Stacks">
+      <div class="panel stack u"><h2>Undo stack</h2><p class="size" id="uSize"></p><ol id="uList"></ol></div>
+      <div class="panel stack r"><h2>Redo stack</h2><p class="size" id="rSize"></p><ol id="rList"></ol></div>
+    </section>
+  </div>
+
+  <div class="rules">
+    <ol>
+      <li>A new edit is applied, pushed onto the undo stack, and clears the redo stack.</li>
+      <li>Undo pops the undo stack, reverses the edit, and pushes it onto the redo stack.</li>
+      <li>Redo pops the redo stack, re-applies the edit, and pushes it onto the undo stack.</li>
+    </ol>
+    <p>Shortcuts: Ctrl/Cmd+Z to undo, Ctrl+Y or Ctrl/Cmd+Shift+Z to redo.</p>
+  </div>
+</div>
+
+<script>
+class Stack {
+  constructor(){ this.items = []; }
+  push(x){ this.items.push(x); }
+  pop(){ if (this.isEmpty()) throw new Error("pop from empty stack"); return this.items.pop(); }
+  peek(){ return this.items[this.items.length - 1]; }
+  isEmpty(){ return this.items.length === 0; }
+  clear(){ this.items = []; }
+  get size(){ return this.items.length; }
+}
+
+// An edit replaces `removed` with `inserted` at `pos`. It covers typing, deleting, pasting, and replacing.
+const apply  = (t, c) => t.slice(0, c.pos) + c.inserted + t.slice(c.pos + c.removed.length);
+const revert = (t, c) => t.slice(0, c.pos) + c.removed  + t.slice(c.pos + c.inserted.length);
+
+const ed = document.getElementById("ed");
+const undoBtn = document.getElementById("undoBtn");
+const redoBtn = document.getElementById("redoBtn");
+const statusEl = document.getElementById("status");
+const undoStack = new Stack(), redoStack = new Stack();
+let text = "";
+
+function describe(c){
+  const clip = s => { const v = s.replace(/\n/g, "↵"); return v.length > 22 ? v.slice(0, 22) + "…" : v; };
+  if (c.removed && c.inserted) return ["Replace", "“" + clip(c.removed) + "” with “" + clip(c.inserted) + "”"];
+  if (c.inserted) return ["Insert", "“" + clip(c.inserted) + "” at " + c.pos];
+  return ["Delete", "“" + clip(c.removed) + "” at " + c.pos];
+}
+
+function drawStack(stack, list, sizeEl, fresh){
+  list.replaceChildren();
+  if (stack.isEmpty()){
+    const li = document.createElement("li");
+    li.className = "empty"; li.textContent = "Empty";
+    list.appendChild(li);
+  }
+  for (let i = stack.items.length - 1; i >= 0; i--){
+    const [head, detail] = describe(stack.items[i]);
+    const li = document.createElement("li");
+    li.textContent = head;
+    const small = document.createElement("small");
+    small.textContent = detail;
+    li.appendChild(small);
+    if (fresh && i === stack.items.length - 1) li.className = "enter";
+    list.appendChild(li);
+  }
+  sizeEl.textContent = stack.size + (stack.size === 1 ? " item" : " items");
+}
+
+function render(pushedTo, message){
+  drawStack(undoStack, document.getElementById("uList"), document.getElementById("uSize"), pushedTo === "u");
+  drawStack(redoStack, document.getElementById("rList"), document.getElementById("rSize"), pushedTo === "r");
+  undoBtn.disabled = undoStack.isEmpty();
+  redoBtn.disabled = redoStack.isEmpty();
+  if (message) statusEl.textContent = message;
+}
+
+function onEdit(){
+  const next = ed.value, prev = text;
+  let p = 0;
+  const max = Math.min(prev.length, next.length);
+  while (p < max && prev[p] === next[p]) p++;
+  let s = 0;
+  while (s < max - p && prev[prev.length - 1 - s] === next[next.length - 1 - s]) s++;
+  const cmd = { pos: p, removed: prev.slice(p, prev.length - s), inserted: next.slice(p, next.length - s) };
+  if (!cmd.removed && !cmd.inserted) return;
+  text = next;
+  undoStack.push(cmd);
+  const hadRedo = redoStack.size;
+  redoStack.clear();
+  render("u", "Pushed " + describe(cmd)[0].toLowerCase() + " onto the undo stack." +
+    (hadRedo ? " The redo stack was cleared because this edit starts a new history." : ""));
+}
+
+function undo(){
+  if (undoStack.isEmpty()) return;
+  const cmd = undoStack.pop();
+  text = revert(text, cmd);
+  ed.value = text;
+  redoStack.push(cmd);
+  ed.focus(); ed.setSelectionRange(cmd.pos + cmd.removed.length, cmd.pos + cmd.removed.length);
+  render("r", "Popped " + describe(cmd)[0].toLowerCase() + " from the undo stack, reversed it, and pushed it onto the redo stack.");
+}
+
+function redo(){
+  if (redoStack.isEmpty()) return;
+  const cmd = redoStack.pop();
+  text = apply(text, cmd);
+  ed.value = text;
+  undoStack.push(cmd);
+  ed.focus(); ed.setSelectionRange(cmd.pos + cmd.inserted.length, cmd.pos + cmd.inserted.length);
+  render("u", "Popped " + describe(cmd)[0].toLowerCase() + " from the redo stack, re-applied it, and pushed it onto the undo stack.");
+}
+
+ed.addEventListener("beforeinput", e => {
+  if (e.inputType === "historyUndo"){ e.preventDefault(); undo(); }
+  if (e.inputType === "historyRedo"){ e.preventDefault(); redo(); }
+});
+ed.addEventListener("input", onEdit);
+ed.addEventListener("keydown", e => {
+  const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
+  if (mod && k === "z" && !e.shiftKey){ e.preventDefault(); undo(); }
+  else if (mod && (k === "y" || (k === "z" && e.shiftKey))){ e.preventDefault(); redo(); }
+});
+undoBtn.addEventListener("click", undo);
+redoBtn.addEventListener("click", redo);
+render();
+</script>
+</body>
+</html>
